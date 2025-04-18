@@ -8,6 +8,8 @@
 #include <latch>
 #include <Convert/Convert.hpp>
 #include <Cryptography/Md5.hpp>
+#include <Cryptography/Sha256.hpp>
+#include <set>
 
 #ifdef CuUtil_Platform_Windows
 #undef max
@@ -101,15 +103,38 @@ inline std::string GetLastWriteTime(const std::filesystem::path& path)
     return {};
 }
 
-inline std::string GetFileMd5(const std::filesystem::path& path)
+inline std::tuple<std::string, std::string> GetFileMd5(const std::filesystem::path& path)
 {
-    try
+    if (std::filesystem::status(path).type() == std::filesystem::file_type::regular)
     {
-        return CuStr::Appends("'\\x", CuCrypto::Md5{}.Append(path).Digest().ToString(), "'");
-    }
-    catch (const std::exception& ex)
-    {
-        LogWarn("{}", ex.what());
+        try
+        {
+            const auto sz = std::filesystem::file_size(path);
+            CuCrypto::Md5 md5{};
+            CuCrypto::Sha256 sha256{};
+
+            std::ifstream fs(path, std::ios::in | std::ios::binary);
+            if (!fs) return {};
+
+            std::array<uint8_t, 4096> buf{};
+            for (size_t i = 0; i < sz;)
+            {
+                fs.read((char*)buf.data(), buf.size());
+                const auto count = fs.gcount();
+                std::span<uint8_t> ref(buf.data(), count);
+                md5.Append(ref);
+                sha256.Append(ref);
+                i += count;
+            }
+            return std::make_tuple(
+                CuStr::Appends("'\\x", md5.Digest().ToString(), "'"),
+                CuStr::Appends("'\\x", sha256.Digest().ToString(), "'")
+            );
+        }
+        catch (const std::exception& ex)
+        {
+            LogWarn("{}", ex.what());
+        }
     }
 
     return {};
@@ -141,6 +166,7 @@ inline bool SqlExec(pqxx::work& dbTrans, const std::u8string_view sql)
     }
 
     dbTrans.commit();
+    return true;
 }
 
 inline void SqlHandler(const SqlHandlerParams& params)
@@ -159,6 +185,9 @@ inline void SqlHandler(const SqlHandlerParams& params)
             {
                 auto [path, event] = queue->Read();
                 if (path.empty()) break;
+                if (std::filesystem::is_symlink(path)) continue;
+
+                path = path.lexically_normal();
 
                 LogInfo("-> {} {}", CuEnum::ToString(event), path.u8string());
 
@@ -168,9 +197,10 @@ inline void SqlHandler(const SqlHandlerParams& params)
                     auto fs = GetFileSize(path);
                     auto ft = GetLastWriteTime(path);
                     std::string fm{};
-                    if (!noHash)
+                    if (!noHash && std::filesystem::status(path).type() == std::filesystem::file_type::regular);
                     {
-                        fm = GetFileMd5(path);
+                        auto [fmR, sha256R] = GetFileMd5(path);
+                        fm = fmR;
                     }
                     auto sql = CuStr::AppendsU8(u8"insert into fd (device_name, parent_path, filename, file_status, file_size, last_write_time, file_md5) "
                         "values (",
@@ -212,35 +242,34 @@ inline void SqlHandler(const SqlHandlerParams& params)
     }
 }
 
-inline std::vector<std::filesystem::path> GetRoots()
+inline std::set<std::filesystem::path> GetRoots()
 {
-    if constexpr (CuUtil::Platform::Native == CuUtil::Platform::Windows)
+#ifdef CuUtil_Platform_Windows
+    constexpr std::string_view AlphaTable = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    const auto drives = GetLogicalDrives();
+    if (drives == 0)
     {
-        constexpr std::string_view AlphaTable = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
-        const auto drives = GetLogicalDrives();
-        if (drives == 0)
-        {
-            LogErr("GetLogicalDrives return 0");
-            return {};
-        }
-
-        std::vector<std::filesystem::path> buf{};
-        for (auto i = 0; i < AlphaTable.size(); i++)
-        {
-            if ((drives >> i) & 1)
-            {
-                std::string root;
-                root.push_back(AlphaTable[i]);
-                root.append(":\\");
-                buf.emplace_back(root);
-            }
-        }
-
-        return buf;
+        LogErr("GetLogicalDrives return 0");
+        return {};
     }
-    
+
+    std::vector<std::filesystem::path> buf{};
+    for (auto i = 0; i < AlphaTable.size(); i++)
+    {
+        if ((drives >> i) & 1)
+        {
+            std::string root;
+            root.push_back(AlphaTable[i]);
+            root.append(":\\");
+            buf.emplace_back(root);
+        }
+    }
+
+    return buf;
+#else    
     return { "/" };
+#endif
 }
 
 int main(const int argc, const char* argv[])
@@ -250,7 +279,7 @@ int main(const int argc, const char* argv[])
 #endif
 
     CuLog::Init();
-    CuLog::Log.Level = CuLog::LogLevel::Error;
+    // CuLog::Log.Level = CuLog::LogLevel::Error;
 
     CuArgs::Arguments args{};
 
@@ -261,7 +290,8 @@ int main(const int argc, const char* argv[])
     CuArgs::Argument<std::string> dbHostArg{"-h", "db host", "localhost"};
     CuArgs::Argument<uint16_t> dbPortArg{ "--port", "db port", 5432 };
     CuArgs::Argument<std::string> dbNameArg{ "-n", "db name", "fd"};
-    args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg);
+    CuArgs::Argument<std::string> rootArg{ "--root", "root dir" };
+    args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg, rootArg);
     
     CuArgs::BoolArgument noHashArg{"--no-hash", "no hash"};
     args.Add(noHashArg);
@@ -280,6 +310,8 @@ int main(const int argc, const char* argv[])
 
         const auto noHash = args.Value(noHashArg);
 
+        const auto rootExt = args.Get(rootArg);
+
         LogInfo(args.GetValuesDesc());
 
         auto queue = std::make_shared<UpdateListener::QueueType>();
@@ -288,7 +320,12 @@ int main(const int argc, const char* argv[])
         if (op == FdOperator::Watch) params.NoHash = true;
         SqlThread = std::thread(SqlHandler, params);
 
-        const auto roots = GetRoots();
+        auto roots = GetRoots();
+        if (rootExt)
+        {
+            roots.clear();
+            roots.emplace(*rootExt);
+        }
 
         if (op == FdOperator::Watch)
         {
@@ -301,6 +338,9 @@ int main(const int argc, const char* argv[])
             for (const auto& root : roots)
             {
                 ids.emplace_back(watcher->addWatch(root.string(), listener.get(), true));
+                if (ids.back() < 0) {
+                    LogErr("watch {} error: {}", root, ids.back());
+                }
             }
 
             watcher->watch();
@@ -343,6 +383,6 @@ int main(const int argc, const char* argv[])
     }
 
     if (SqlThread.joinable()) SqlThread.join();
-
+    
     CuLog::End();
 }
