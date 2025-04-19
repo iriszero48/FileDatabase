@@ -169,6 +169,34 @@ inline bool SqlExec(pqxx::work& dbTrans, const std::u8string_view sql)
     return true;
 }
 
+inline bool IsSym(const std::filesystem::path& path)
+{
+    try
+    {
+        return std::filesystem::is_symlink(path);
+    }
+    catch (const std::exception& ex)
+    {
+        LogWarn("{}", ex.what());
+    }
+
+    return false;
+}
+
+inline std::u8string GetPathU8(const std::filesystem::path& path)
+{
+    try
+    {
+        return path.u8string();
+    }
+    catch (const std::exception& e)
+    {
+        LogWarn("{}", e.what());
+    }
+
+    return {};
+}
+
 inline void SqlHandler(const SqlHandlerParams& params)
 {
     const auto& [queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, noHash] = params;
@@ -180,16 +208,17 @@ inline void SqlHandler(const SqlHandlerParams& params)
             pqxx::connection dbConn(CuStr::Format("user={} password={} host={} port={} dbname={} client_encoding=utf-8 target_session_attrs=read-write",
                 dbUser, dbPassword, dbHost, dbPort, dbName));
 
-            auto readLoop = true;
-            while (readLoop)
+            while (true)
             {
                 auto [path, event] = queue->Read();
-                if (path.empty()) break;
-                if (std::filesystem::is_symlink(path)) continue;
+                if (path.empty()) return;
 
                 path = path.lexically_normal();
 
-                LogInfo("-> {} {}", CuEnum::ToString(event), path.u8string());
+                const auto u8path = GetPathU8(path);
+                if (u8path.empty()) continue;
+
+                LogInfo("-> {} {}", CuEnum::ToString(event), u8path);
 
                 pqxx::work dbTrans(dbConn);
                 if (event == ListenerEvent::Update) {
@@ -197,7 +226,7 @@ inline void SqlHandler(const SqlHandlerParams& params)
                     auto fs = GetFileSize(path);
                     auto ft = GetLastWriteTime(path);
                     std::string fm{};
-                    if (!noHash && std::filesystem::status(path).type() == std::filesystem::file_type::regular);
+                    if (!noHash)
                     {
                         auto [fmR, sha256R] = GetFileMd5(path);
                         fm = fmR;
@@ -254,7 +283,7 @@ inline std::set<std::filesystem::path> GetRoots()
         return {};
     }
 
-    std::vector<std::filesystem::path> buf{};
+    std::set<std::filesystem::path> buf{};
     for (auto i = 0; i < AlphaTable.size(); i++)
     {
         if ((drives >> i) & 1)
@@ -262,7 +291,7 @@ inline std::set<std::filesystem::path> GetRoots()
             std::string root;
             root.push_back(AlphaTable[i]);
             root.append(":\\");
-            buf.emplace_back(root);
+            buf.emplace(root);
         }
     }
 
@@ -275,11 +304,10 @@ inline std::set<std::filesystem::path> GetRoots()
 int main(const int argc, const char* argv[])
 {
 #ifdef CuUtil_Platform_Windows
-    SetConsoleCP(65001);
+    //SetConsoleCP(65001);
 #endif
 
     CuLog::Init();
-    // CuLog::Log.Level = CuLog::LogLevel::Error;
 
     CuArgs::Arguments args{};
 
@@ -296,9 +324,27 @@ int main(const int argc, const char* argv[])
     CuArgs::BoolArgument noHashArg{"--no-hash", "no hash"};
     args.Add(noHashArg);
 
+    CuArgs::EnumArgument<CuLog::LogLevel> consoleLogLevelArg{ "--console-log-level", "console log level", CuLog::LogLevel::Info };
+    CuArgs::EnumArgument<CuLog::LogLevel> fileLogLevelArg{ "--file-log-level", "file log level", CuLog::LogLevel::Info };
+    CuArgs::Argument<std::filesystem::path> logFilePathArg{ "--log-file", "log file" };
+    args.Add(consoleLogLevelArg, fileLogLevelArg, logFilePathArg);
+
     try
     {
         args.Parse(argc, argv);
+
+        const auto consoleLogLeve = args.Value(consoleLogLevelArg);
+        const auto fileLogLevel = args.Value(fileLogLevelArg);
+        const auto logFile = args.Get(logFilePathArg);
+
+        CuLog::Log.Level = consoleLogLeve;
+        CuLog::ConsoleLogLevel = consoleLogLeve;
+        CuLog::FileLogLevel = fileLogLevel;
+        if (logFile)
+        {
+            CuLog::Log.Level = std::max(consoleLogLeve, fileLogLevel);
+            CuLog::LogFile = *logFile;
+        }
 
         const auto op = args.Value(opArg);
         const auto device = args.Value(deviceArg);
@@ -316,7 +362,7 @@ int main(const int argc, const char* argv[])
 
         auto queue = std::make_shared<UpdateListener::QueueType>();
 
-        SqlHandlerParams params{ queue, device, dbUser, dbPassword, dbHost, dbPort, dbName };
+        SqlHandlerParams params{ queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, noHash };
         if (op == FdOperator::Watch) params.NoHash = true;
         SqlThread = std::thread(SqlHandler, params);
 
@@ -360,15 +406,94 @@ int main(const int argc, const char* argv[])
 
             for (const auto& root : roots)
             {
-                std::error_code ec{};
-                std::filesystem::recursive_directory_iterator walker(root, std::filesystem::directory_options::skip_permission_denied);
-                for (auto entry = walker; entry != std::filesystem::recursive_directory_iterator{}; )
+                const auto pathForLog = [](const std::filesystem::path& path) -> std::u8string {
+                    try
+                    {
+                        return path.u8string();
+                    }
+                    catch (const std::exception&)
+                    {
+                        try
+                        {
+                            return path.parent_path().u8string() + u8"/<file>";
+                        }
+                        catch (const std::exception&)
+                        {
+                            return u8"<file>";
+                        }
+                    }
+                };
+                std::error_code errorCode;
+                std::deque<std::filesystem::path> scanQueue{};
+                const std::filesystem::directory_iterator end;
+                scanQueue.emplace_back(root);
+                while (!scanQueue.empty())
                 {
-                    queue->Emplace(entry->path(), ListenerEvent::Update);
-                    
-                    std::error_code ec{};
-                    entry.increment(ec);
-                    if (ec) continue;
+                    try
+                    {
+                        for (std::filesystem::directory_iterator file(scanQueue.front(), std::filesystem::directory_options::skip_permission_denied, errorCode); file != end; ++file)
+                        {
+                            try
+                            {
+                                if (errorCode)
+                                {
+                                    LogWarn("scan: {} {}", pathForLog(file->path()), errorCode.message());
+                                    errorCode.clear();
+                                    continue;
+                                }
+
+                                auto testU8 = false;
+                                try
+                                {
+                                    file->path().u8string();
+                                    testU8 = true;
+                                }
+                                catch (const std::exception&)
+                                {
+                                    LogWarn("scan: {}: cvt u8 error", pathForLog(file->path()));
+                                }
+
+                                if (!testU8) continue;
+
+                                auto isSym = file->is_symlink(errorCode);
+                                if (errorCode)
+                                {
+                                    LogWarn("scan: {} {}", file->path(), errorCode.message());
+                                    errorCode.clear();
+                                    isSym = false;
+                                }
+                                if (isSym) continue;
+                                
+                                auto st = file->status(errorCode);
+                                auto isDir = false;
+                                if (errorCode)
+                                {
+                                    LogWarn("scan: {} {}", file->path(), errorCode.message());
+                                    errorCode.clear();
+                                }
+                                else
+                                {
+                                    if (st.type() == std::filesystem::file_type::directory) isDir = true;
+                                }
+
+                                if (isDir)
+                                {
+                                    scanQueue.emplace_back(file->path());
+                                }
+
+                                queue->Emplace(file->path(), ListenerEvent::Update);
+                            }
+                            catch (const std::exception& e)
+                            {
+                                LogErr("scan: {} {}", file->path().u8string(), e.what());
+                            }
+                        }
+                    }
+                    catch (const std::exception& e)
+                    {
+                        LogErr("scan: {} {}", scanQueue.front(), e.what());
+                    }
+                    scanQueue.pop_front();
                 }
             }
 
