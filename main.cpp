@@ -10,6 +10,7 @@
 #include <Cryptography/Md5.hpp>
 #include <Cryptography/Sha256.hpp>
 #include <set>
+#include <regex>
 
 #ifdef CuUtil_Platform_Windows
 #undef max
@@ -151,6 +152,7 @@ struct SqlHandlerParams
     std::string DbName;
 
     bool NoHash;
+    std::regex HashSkip;
 };
 
 inline bool SqlExec(pqxx::work& dbTrans, const std::u8string_view sql)
@@ -199,7 +201,7 @@ inline std::u8string GetPathU8(const std::filesystem::path& path)
 
 inline void SqlHandler(const SqlHandlerParams& params)
 {
-    const auto& [queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, noHash] = params;
+    const auto& [queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, noHash, hashSkip] = params;
     while (true)
     {
         try
@@ -228,8 +230,12 @@ inline void SqlHandler(const SqlHandlerParams& params)
                     std::string fm{};
                     if (!noHash)
                     {
-                        auto [fmR, sha256R] = GetFileMd5(path);
-                        fm = fmR;
+                        auto pu8 = CuStr::ToDirtyUtf8String(u8path);
+                        if (!std::regex_match(pu8, hashSkip))
+                        {
+                            auto [fmR, sha256R] = GetFileMd5(path);
+                            fm = fmR;
+                        }
                     }
                     auto sql = CuStr::AppendsU8(u8"insert into fd (device_name, parent_path, filename, file_status, file_size, last_write_time, file_md5) "
                         "values (",
@@ -322,7 +328,8 @@ int main(const int argc, const char* argv[])
     args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg, rootArg);
     
     CuArgs::BoolArgument noHashArg{"--no-hash", "no hash"};
-    args.Add(noHashArg);
+    CuArgs::Argument<std::string> hashSkipArg{"--hash-skip", "hash skip regex", ""};
+    args.Add(noHashArg, hashSkipArg);
 
     CuArgs::EnumArgument<CuLog::LogLevel> consoleLogLevelArg{ "--console-log-level", "console log level", CuLog::LogLevel::Info };
     CuArgs::EnumArgument<CuLog::LogLevel> fileLogLevelArg{ "--file-log-level", "file log level", CuLog::LogLevel::Info };
@@ -355,6 +362,7 @@ int main(const int argc, const char* argv[])
         const auto dbName = args.Value(dbNameArg);
 
         const auto noHash = args.Value(noHashArg);
+        const auto hashSkip = args.Value(hashSkipArg);
 
         const auto rootExt = args.Get(rootArg);
 
@@ -362,7 +370,7 @@ int main(const int argc, const char* argv[])
 
         auto queue = std::make_shared<UpdateListener::QueueType>();
 
-        SqlHandlerParams params{ queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, noHash };
+        SqlHandlerParams params{ queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, noHash, std::regex(hashSkip) };
         if (op == FdOperator::Watch) params.NoHash = true;
         SqlThread = std::thread(SqlHandler, params);
 
