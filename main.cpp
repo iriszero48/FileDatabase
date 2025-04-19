@@ -155,15 +155,20 @@ struct SqlHandlerParams
     std::regex HashSkip;
 };
 
+inline auto ToLibpqStr(const std::u8string_view str)
+{
+#if PQXX_VERSION_MAJOR >= 7
+    return CuStr::ToDirtyUtf8StringView(str);
+#else
+    return CuStr::ToDirtyUtf8String(str);
+#endif
+}
+
 inline bool SqlExec(pqxx::work& dbTrans, const std::u8string_view sql)
 {
     try
     {
-#if PQXX_VERSION_MAJOR >= 7
-        dbTrans.exec(CuStr::ToDirtyUtf8StringView(sql));
-#else
-        dbTrans.exec(CuStr::ToDirtyUtf8String(sql));
-#endif
+        dbTrans.exec(ToLibpqStr(sql));
     }
     catch (const std::exception& ex)
     {
@@ -244,8 +249,8 @@ inline void SqlHandler(const SqlHandlerParams& params)
                     auto sql = CuStr::AppendsU8(u8"insert into fd (device_name, parent_path, filename, file_status, file_size, last_write_time, file_md5) "
                         "values (",
                             CuStr::FromDirtyUtf8String(dbTrans.quote(device)), u8", ",
-                            CuStr::FromDirtyUtf8String(dbTrans.quote(CuStr::ToDirtyUtf8StringView(path.parent_path().u8string()))), u8", ",
-                            CuStr::FromDirtyUtf8String(dbTrans.quote(CuStr::ToDirtyUtf8StringView(path.filename().u8string()))), u8", ",
+                            CuStr::FromDirtyUtf8String(dbTrans.quote(ToLibpqStr(path.parent_path().u8string()))), u8", ",
+                            CuStr::FromDirtyUtf8String(dbTrans.quote(ToLibpqStr(path.filename().u8string()))), u8", ",
                             CuStr::FromDirtyUtf8String(*CuConv::ToString(st)), u8", ",
                             CuStr::FromDirtyUtf8String(*CuConv::ToString(fs)), u8", ",
                             ft.empty() ? u8"null" : CuStr::FromDirtyUtf8String(dbTrans.quote(ft)), u8", ",
@@ -264,8 +269,8 @@ inline void SqlHandler(const SqlHandlerParams& params)
                 {
                     auto sql = CuStr::FormatU8("delete from fd where device_name = {} and parent_path = {} and filename = {};",
                         CuStr::FromDirtyUtf8String(dbTrans.quote(device)),
-                        CuStr::FromDirtyUtf8String(dbTrans.quote(CuStr::ToDirtyUtf8StringView(path.parent_path().u8string()))),
-                        CuStr::FromDirtyUtf8String(dbTrans.quote(CuStr::ToDirtyUtf8StringView(path.filename().u8string()))));
+                        CuStr::FromDirtyUtf8String(dbTrans.quote(ToLibpqStr(path.parent_path().u8string()))),
+                        CuStr::FromDirtyUtf8String(dbTrans.quote(ToLibpqStr(path.filename().u8string()))));
                     LogVerb("{}", sql);
 
                     SqlExec(dbTrans, sql);
