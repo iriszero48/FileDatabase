@@ -94,7 +94,14 @@ inline std::string GetLastWriteTime(const std::filesystem::path& path)
 {
     try
     {
+#if 1
+        const auto t = std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(std::filesystem::last_write_time(path)));
+        tm local{};
+        CuTime::Local(&local, &t);
+        return CuStr::ToString(std::put_time(&local, "%F %T"));
+#else
         return CuStr::ToString(std::filesystem::last_write_time(path));
+#endif
     }
     catch (const std::exception& ex)
     {
@@ -419,7 +426,7 @@ int main(const int argc, const char* argv[])
         }
         else if (op == FdOperator::Sync)
         {
-            queue->DynLimit = 10000;
+            queue->DynLimit = 500;
 
             for (const auto& root : roots)
             {
