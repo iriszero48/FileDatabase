@@ -159,7 +159,11 @@ inline bool SqlExec(pqxx::work& dbTrans, const std::u8string_view sql)
 {
     try
     {
+#if PQXX_VERSION_MAJOR >= 7
         dbTrans.exec(CuStr::ToDirtyUtf8StringView(sql));
+#else
+        dbTrans.exec(CuStr::ToDirtyUtf8String(sql));
+#endif
     }
     catch (const std::exception& ex)
     {
