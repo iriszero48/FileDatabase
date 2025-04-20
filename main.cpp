@@ -63,8 +63,8 @@ inline int32_t GetFileStatus(const std::filesystem::path& path)
     {
         auto st = std::filesystem::status(path);
 
-        uint32_t ret = std::to_underlying(st.type()) << 16;
-        ret += std::to_underlying(st.permissions());
+        uint32_t ret = CuUtil::ToUnderlying(st.type()) << 16;
+        ret += CuUtil::ToUnderlying(st.permissions());
         
         return ret;
     }
