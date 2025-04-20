@@ -5,7 +5,6 @@
 #include <Enum/Enum.hpp>
 #include <efsw/efsw.hpp>
 #include <Thread/Thread.hpp>
-#include <latch>
 #include <Convert/Convert.hpp>
 #include <Cryptography/Md5.hpp>
 #include <Cryptography/Sha256.hpp>
@@ -20,7 +19,7 @@ CuEnum_MakeEnum(FdOperator, Watch, Sync);
 CuEnum_MakeEnum(ListenerEvent, Update, Delete);
 
 static std::thread SqlThread{};
-static std::latch SqlThreadLatch(1);
+static std::atomic_bool SqlExit{false};
 
 class UpdateListener : public efsw::FileWatchListener {
 public:
@@ -415,7 +414,11 @@ int main(const int argc, const char* argv[])
 
             watcher->watch();
 
-            SqlThreadLatch.wait();
+            while (!SqlExit)
+            {
+                using namespace std::chrono_literals;
+                std::this_thread::sleep_for(10ms);
+            }
 
             for (const auto& id : ids)
             {
