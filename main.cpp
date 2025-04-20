@@ -5,7 +5,6 @@
 #include <Enum/Enum.hpp>
 #include <efsw/efsw.hpp>
 #include <Thread/Thread.hpp>
-#include <latch>
 #include <Convert/Convert.hpp>
 #include <Cryptography/Md5.hpp>
 #include <Cryptography/Sha256.hpp>
@@ -20,7 +19,7 @@ CuEnum_MakeEnum(FdOperator, Watch, Sync);
 CuEnum_MakeEnum(ListenerEvent, Update, Delete);
 
 static std::thread SqlThread{};
-static std::latch SqlThreadLatch(1);
+static std::atomic_bool SqlExit{false};
 
 class UpdateListener : public efsw::FileWatchListener {
 public:
@@ -94,7 +93,7 @@ inline std::string GetLastWriteTime(const std::filesystem::path& path)
 {
     try
     {
-#if __GNUC__ < 13
+#if defined(__GNUC__) && __GNUC__ < 13
         const auto t = std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(std::filesystem::last_write_time(path)));
         tm local{};
         CuTime::Local(&local, &t);
@@ -344,7 +343,7 @@ int main(const int argc, const char* argv[])
     args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg, rootArg);
     
     CuArgs::BoolArgument noHashArg{"--no-hash", "no hash"};
-    CuArgs::Argument<std::string> hashSkipArg{"--hash-skip", "hash skip regex", ""};
+    CuArgs::Argument<std::string> hashSkipArg{"--hash-skip", "hash skip regex", "/(proc|sys|run)/.+"};
     args.Add(noHashArg, hashSkipArg);
 
     CuArgs::EnumArgument<CuLog::LogLevel> consoleLogLevelArg{ "--console-log-level", "console log level", CuLog::LogLevel::Info };
@@ -415,7 +414,11 @@ int main(const int argc, const char* argv[])
 
             watcher->watch();
 
-            SqlThreadLatch.wait();
+            while (!SqlExit)
+            {
+                using namespace std::chrono_literals;
+                std::this_thread::sleep_for(10ms);
+            }
 
             for (const auto& id : ids)
             {
@@ -469,7 +472,7 @@ int main(const int argc, const char* argv[])
                                 auto testU8 = false;
                                 try
                                 {
-                                    file->path().u8string();
+                                    (void)file->path().u8string();
                                     testU8 = true;
                                 }
                                 catch (const std::exception&)
