@@ -156,6 +156,7 @@ struct SqlHandlerParams
     std::string DbHost;
     uint16_t DbPort; 
     std::string DbName;
+    std::regex Ignore;
 
     bool NoHash;
     std::regex HashSkip;
@@ -188,16 +189,15 @@ inline bool SqlExec(pqxx::work& dbTrans, const std::u8string_view sql)
 
 inline bool IsSym(const std::filesystem::path& path)
 {
-    try
+    std::error_code ec{};
+    const auto st = std::filesystem::is_symlink(path, ec);
+    if (ec)
     {
-        return std::filesystem::is_symlink(path);
+        LogWarn("{}", ec.message());
+        return false;
     }
-    catch (const std::exception& ex)
-    {
-        LogWarn("{}", ex.what());
-    }
-
-    return false;
+    
+    return st;
 }
 
 inline std::u8string GetPathU8(const std::filesystem::path& path)
@@ -216,7 +216,7 @@ inline std::u8string GetPathU8(const std::filesystem::path& path)
 
 inline void SqlHandler(const SqlHandlerParams& params)
 {
-    const auto& [queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, noHash, hashSkip] = params;
+    const auto& [queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, ignore, noHash, hashSkip] = params;
     while (true)
     {
         try
@@ -340,7 +340,8 @@ int main(const int argc, const char* argv[])
     CuArgs::Argument<uint16_t> dbPortArg{ "--port", "db port", 5432 };
     CuArgs::Argument<std::string> dbNameArg{ "-n", "db name", "fd"};
     CuArgs::Argument<std::string> rootArg{ "--root", "root dir" };
-    args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg, rootArg);
+    CuArgs::Argument<std::string> ignoreArg{ "--ignore", "ignore regex", "" };
+    args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg, rootArg, ignoreArg);
     
     CuArgs::BoolArgument noHashArg{"--no-hash", "no hash"};
     CuArgs::Argument<std::string> hashSkipArg{"--hash-skip", "hash skip regex", "/(proc|sys|run)/.+"};
@@ -375,6 +376,7 @@ int main(const int argc, const char* argv[])
         const auto dbHost = args.Value(dbHostArg);
         const auto dbPort = args.Value(dbPortArg);
         const auto dbName = args.Value(dbNameArg);
+        const auto ignore = args.Value(ignoreArg);
 
         const auto noHash = args.Value(noHashArg);
         const auto hashSkip = args.Value(hashSkipArg);
@@ -385,7 +387,7 @@ int main(const int argc, const char* argv[])
 
         auto queue = std::make_shared<UpdateListener::QueueType>();
 
-        SqlHandlerParams params{ queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, noHash, std::regex(hashSkip) };
+        SqlHandlerParams params{ queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, std::regex(ignore), noHash, std::regex(hashSkip)};
         if (op == FdOperator::Watch) params.NoHash = true;
         SqlThread = std::thread(SqlHandler, params);
 
@@ -470,9 +472,10 @@ int main(const int argc, const char* argv[])
                                 }
 
                                 auto testU8 = false;
+                                std::string dirtyU8{};
                                 try
                                 {
-                                    (void)file->path().u8string();
+                                    dirtyU8 = CuStr::ToDirtyUtf8String(file->path().u8string());
                                     testU8 = true;
                                 }
                                 catch (const std::exception&)
@@ -481,6 +484,7 @@ int main(const int argc, const char* argv[])
                                 }
 
                                 if (!testU8) continue;
+                                if (std::regex_match(dirtyU8, params.Ignore)) continue;
 
                                 auto isSym = file->is_symlink(errorCode);
                                 if (errorCode)
