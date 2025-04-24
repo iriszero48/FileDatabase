@@ -8,6 +8,8 @@
 #include <Convert/Convert.hpp>
 #include <Cryptography/Md5.hpp>
 #include <Cryptography/Sha256.hpp>
+#include <Cryptography/Sha1.hpp>
+#include <Cryptography/Crc32.hpp>
 #include <set>
 #include <regex>
 
@@ -110,7 +112,8 @@ inline std::string GetLastWriteTime(const std::filesystem::path& path)
     return {};
 }
 
-inline std::tuple<std::string, std::string> GetFileMd5(const std::filesystem::path& path)
+// md5, sha256, sha1, crc32
+inline std::tuple<std::string, std::string, std::string, std::string> GetFileHash(const std::filesystem::path& path)
 {
     if (std::filesystem::status(path).type() == std::filesystem::file_type::regular)
     {
@@ -119,6 +122,8 @@ inline std::tuple<std::string, std::string> GetFileMd5(const std::filesystem::pa
             const auto sz = std::filesystem::file_size(path);
             CuCrypto::Md5 md5{};
             CuCrypto::Sha256 sha256{};
+            CuCrypto::Sha1 sha1{};
+            CuCrypto::Crc32 crc32{};
 
             std::ifstream fs(path, std::ios::in | std::ios::binary);
             if (!fs) return {};
@@ -131,11 +136,19 @@ inline std::tuple<std::string, std::string> GetFileMd5(const std::filesystem::pa
                 std::span<uint8_t> ref(buf.data(), count);
                 md5.Append(ref);
                 sha256.Append(ref);
+                sha1.Append(ref);
+                crc32.Append(ref);
                 i += count;
+
+                if (count < (int64_t)buf.size()) break;
+                if (!fs) break;
+                if (fs.eof()) break;
             }
             return std::make_tuple(
                 CuStr::Appends("'\\x", md5.Digest().ToString(), "'"),
-                CuStr::Appends("'\\x", sha256.Digest().ToString(), "'")
+                CuStr::Appends("'\\x", sha256.Digest().ToString(), "'"),
+                CuStr::Appends("'\\x", sha1.Digest().ToString(), "'"),
+                CuStr::Appends("'\\x", crc32.Digest().ToString(), "'")
             );
         }
         catch (const std::exception& ex)
@@ -157,6 +170,7 @@ struct SqlHandlerParams
     uint16_t DbPort; 
     std::string DbName;
     std::regex Ignore;
+    bool OutputToFile;
 
     bool NoHash;
     std::regex HashSkip;
@@ -216,7 +230,7 @@ inline std::u8string GetPathU8(const std::filesystem::path& path)
 
 inline void SqlHandler(const SqlHandlerParams& params)
 {
-    const auto& [queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, ignore, noHash, hashSkip] = params;
+    const auto& [queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, ignore, outputToFile, noHash, hashSkip] = params;
     while (true)
     {
         try
@@ -224,6 +238,17 @@ inline void SqlHandler(const SqlHandlerParams& params)
             LogInfo("connect {}", dbHost);
             pqxx::connection dbConn(CuStr::Format("user={} password={} host={} port={} dbname={} client_encoding=utf-8 target_session_attrs=read-write",
                 dbUser, dbPassword, dbHost, dbPort, dbName));
+
+            std::fstream outputFs;
+            if (outputToFile)
+            {
+                outputFs.open("output.txt", std::ios::out | std::ios::app | std::ios::binary);
+                if (!outputFs)
+                {
+                    LogErr("open output.txt failed");
+                    throw std::exception();
+                }
+            }
 
             while (true)
             {
@@ -242,17 +267,20 @@ inline void SqlHandler(const SqlHandlerParams& params)
                     auto st = GetFileStatus(path);
                     auto fs = GetFileSize(path);
                     auto ft = GetLastWriteTime(path);
-                    std::string fm{};
+                    std::string md5{}, sha256{}, sha1{}, crc32{};
                     if (!noHash)
                     {
                         auto pu8 = CuStr::ToDirtyUtf8String(u8path);
                         if (!std::regex_match(pu8, hashSkip))
                         {
-                            auto [fmR, sha256R] = GetFileMd5(path);
-                            fm = fmR;
+                            auto [md5R, sha256R, sha1R, crc32R] = GetFileHash(path);
+                            md5 = md5R;
+                            sha256 = sha256R;
+                            sha1 = sha1R;
+                            crc32 = crc32R;
                         }
                     }
-                    auto sql = CuStr::AppendsU8(u8"insert into fd (device_name, parent_path, filename, file_status, file_size, last_write_time, file_md5) "
+                    auto sql = CuStr::AppendsU8(u8"insert into fd (device_name, parent_path, filename, file_status, file_size, last_write_time, file_md5, file_sha256, file_sha1, file_crc32) "
                         "values (",
                             CuStr::FromDirtyUtf8String(dbTrans.quote(device)), u8", ",
                             CuStr::FromDirtyUtf8String(dbTrans.quote(ToLibpqStr(path.parent_path().u8string()))), u8", ",
@@ -260,16 +288,31 @@ inline void SqlHandler(const SqlHandlerParams& params)
                             CuStr::FromDirtyUtf8String(*CuConv::ToString(st)), u8", ",
                             CuStr::FromDirtyUtf8String(*CuConv::ToString(fs)), u8", ",
                             ft.empty() ? u8"null" : CuStr::FromDirtyUtf8String(dbTrans.quote(ft)), u8", ",
-                            fm.empty() ? u8"null" : CuStr::FromDirtyUtf8String(fm),
+                            md5.empty() ? u8"null" : CuStr::FromDirtyUtf8String(md5), u8", ",
+                            sha256.empty() ? u8"null" : CuStr::FromDirtyUtf8String(sha256), u8", ",
+                            sha1.empty() ? u8"null" : CuStr::FromDirtyUtf8String(sha1), u8", ",
+                            crc32.empty() ? u8"null" : CuStr::FromDirtyUtf8String(crc32),
                         u8") on conflict (device_name, parent_path, filename) do update set "
                         "file_status = excluded.file_status, "
                         "file_size = excluded.file_size, "
                         "last_write_time = excluded.last_write_time, "
-                        "file_md5 = excluded.file_md5;"
+                        "file_md5 = excluded.file_md5, "
+                        "file_sha256 = excluded.file_sha256, "
+                        "file_sha1 = excluded.file_sha1, "
+                        "file_crc32 = excluded.file_crc32;"
                     );
                     LogVerb("{}", sql);
 
-                    SqlExec(dbTrans, sql);
+                    if (outputToFile)
+                    {
+                        outputFs.write((const char*)sql.c_str(), sql.length());
+                        outputFs.write("\n", 1);
+                        outputFs.flush();
+                    }
+                    else
+                    {
+                        SqlExec(dbTrans, sql);
+                    }
                 }
                 else if (event == ListenerEvent::Delete)
                 {
@@ -279,7 +322,16 @@ inline void SqlHandler(const SqlHandlerParams& params)
                         CuStr::FromDirtyUtf8String(dbTrans.quote(ToLibpqStr(path.filename().u8string()))));
                     LogVerb("{}", sql);
 
-                    SqlExec(dbTrans, sql);
+                    if (outputToFile)
+                    {
+                        outputFs.write((const char*)sql.c_str(), sql.length());
+                        outputFs.write("\n", 1);
+                        outputFs.flush();
+                    }
+                    else
+                    {
+                        SqlExec(dbTrans, sql);
+                    }
                 }
             }
         }
@@ -341,7 +393,8 @@ int main(const int argc, const char* argv[])
     CuArgs::Argument<std::string> dbNameArg{ "-n", "db name", "fd"};
     CuArgs::Argument<std::string> rootArg{ "--root", "root dir" };
     CuArgs::Argument<std::string> ignoreArg{ "--ignore", "ignore regex", "" };
-    args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg, rootArg, ignoreArg);
+    CuArgs::BoolArgument outputToFileArg{ "--output-to-file", "output to output.txt" };
+    args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg, rootArg, ignoreArg, outputToFileArg);
     
     CuArgs::BoolArgument noHashArg{"--no-hash", "no hash"};
     CuArgs::Argument<std::string> hashSkipArg{"--hash-skip", "hash skip regex", "/(proc|sys|run)/.+"};
@@ -377,6 +430,7 @@ int main(const int argc, const char* argv[])
         const auto dbPort = args.Value(dbPortArg);
         const auto dbName = args.Value(dbNameArg);
         const auto ignore = args.Value(ignoreArg);
+        const auto outputToFile = args.Value(outputToFileArg);
 
         const auto noHash = args.Value(noHashArg);
         const auto hashSkip = args.Value(hashSkipArg);
@@ -387,7 +441,7 @@ int main(const int argc, const char* argv[])
 
         auto queue = std::make_shared<UpdateListener::QueueType>();
 
-        SqlHandlerParams params{ queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, std::regex(ignore), noHash, std::regex(hashSkip)};
+        SqlHandlerParams params{ queue, device, dbUser, dbPassword, dbHost, dbPort, dbName, std::regex(ignore), outputToFile, noHash, std::regex(hashSkip)};
         if (op == FdOperator::Watch) params.NoHash = true;
         SqlThread = std::thread(SqlHandler, params);
 
