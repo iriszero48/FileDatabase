@@ -12,6 +12,7 @@
 #include <Cryptography/Crc32.hpp>
 #include <set>
 #include <regex>
+#include <Bit/Bit.hpp>
 
 #ifdef CuUtil_Platform_Windows
 #undef max
@@ -95,11 +96,19 @@ inline std::string GetLastWriteTime(const std::filesystem::path& path)
 {
     try
     {
-#if defined(__GNUC__) && __GNUC__ < 13
+#ifdef __APPLE__
+        const auto ft = std::filesystem::last_write_time(path);
+        const auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            ft - decltype(ft)::clock::now() + std::chrono::system_clock::now());
+        auto tt = std::chrono::system_clock::to_time_t(sctp);
+        tm local{};
+        CuTime::Local(&local, &tt);
+        return CuStr::ToString(std::put_time(&local, "%Y-%m-%d %H:%M:%S"));
+#elif defined(__GNUC__) && __GNUC__ < 13
         const auto t = std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(std::filesystem::last_write_time(path)));
         tm local{};
         CuTime::Local(&local, &t);
-        return CuStr::ToString(std::put_time(&local, "%F %T"));
+        return CuStr::ToString(std::put_time(&local, "%Y-%m-%d %H:%M:%S"));
 #else
         return CuStr::ToString(std::filesystem::last_write_time(path));
 #endif
