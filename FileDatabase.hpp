@@ -80,7 +80,7 @@ namespace FileDatabase
         }
         catch (const std::exception& ex)
         {
-            LogWarn("{}", ex.what());
+            LogVerb("{}", ex.what());
         }
 
         return 0;
@@ -94,7 +94,7 @@ namespace FileDatabase
         }
         catch (const std::exception& ex)
         {
-            LogWarn("{}", ex.what());
+            LogVerb("{}", ex.what());
         }
 
         return 0;
@@ -123,7 +123,7 @@ namespace FileDatabase
         }
         catch (const std::exception& ex)
         {
-            LogWarn("{}", ex.what());
+            LogVerb("{}", ex.what());
         }
 
         return {};
@@ -171,7 +171,7 @@ namespace FileDatabase
             }
             catch (const std::exception& ex)
             {
-                LogWarn("{}", ex.what());
+                LogVerb("{}", ex.what());
             }
         }
 
@@ -224,7 +224,7 @@ namespace FileDatabase
         const auto st = std::filesystem::is_symlink(path, ec);
         if (ec)
         {
-            LogWarn("{}", ec.message());
+            LogVerb("{}", ec.message());
             return false;
         }
 
