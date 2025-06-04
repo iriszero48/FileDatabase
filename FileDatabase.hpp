@@ -44,7 +44,7 @@ namespace FileDatabase
         void handleFileAction(efsw::WatchID watchid, const std::string& dir,
             const std::string& filename, efsw::Action action,
             std::string oldFilename) override {
-            const auto fullPath = (std::filesystem::path(CuStr::FromDirtyUtf8String(dir)) / CuStr::FromDirtyUtf8String(filename));
+            const auto fullPath = (std::filesystem::path(CuStr::FromDirtyUtf8String(dir)) / CuStr::FromDirtyUtf8String(filename)).lexically_normal();
             if (std::regex_match(CuStr::ToDirtyUtf8String(fullPath.u8string()), ignore)) return;
 
             switch (action) {
