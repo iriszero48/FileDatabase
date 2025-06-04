@@ -112,7 +112,7 @@ namespace FileDatabase
             tm local{};
             CuTime::Local(&local, &tt);
             return CuStr::ToString(std::put_time(&local, "%Y-%m-%d %H:%M:%S"));
-#elif defined(__GNUC__) && __GNUC__ < 13
+#elif defined(__GNUC__) && __GNUC__ < 14
             const auto t = std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(std::filesystem::last_write_time(path)));
             tm local{};
             CuTime::Local(&local, &t);
