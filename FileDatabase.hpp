@@ -39,7 +39,7 @@ namespace FileDatabase
         std::regex ignore{};
 
     public:
-        UpdateListener(QueuePtrType queue) : queue(queue) {}
+        UpdateListener(QueuePtrType queue, std::regex ignore) : queue(queue), ignore(std::move(ignore)) {}
 
         void handleFileAction(efsw::WatchID watchid, const std::string& dir,
             const std::string& filename, efsw::Action action,
@@ -404,7 +404,7 @@ namespace FileDatabase
             std::thread sqlThread(SqlHandler, params, queue);
 
             std::unique_ptr<efsw::FileWatcher> watcher = std::make_unique<efsw::FileWatcher>();
-            std::unique_ptr<UpdateListener> listener = std::make_unique<UpdateListener>(queue);
+            std::unique_ptr<UpdateListener> listener = std::make_unique<UpdateListener>(queue, params.Ignore);
 
             std::vector<efsw::WatchID> ids{};
             for (const auto& root : roots)

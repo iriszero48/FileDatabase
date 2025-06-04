@@ -1,4 +1,3 @@
 /.vs
 /.vscode
-/build
-/build_msys2
+/build*
