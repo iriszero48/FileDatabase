@@ -22,7 +22,7 @@ int main(const int argc, const char* argv[])
     CuArgs::Argument<uint16_t> dbPortArg{ "--port", "db port", 5432 };
     CuArgs::Argument<std::string> dbNameArg{ "-n", "db name", "fd"};
     CuArgs::Argument<std::string> rootArg{ "--root", "root dir" };
-    CuArgs::Argument<std::string> ignoreArg{ "--ignore", "ignore regex", "" };
+    CuArgs::Argument<std::string> ignoreArg{ "--ignore", "ignore regex", "/dev/.+" };
     CuArgs::BoolArgument outputToFileArg{ "--output-to-file", "output to output.txt" };
     args.Add(opArg, deviceArg, dbUserArg, dbPasswordArg, dbHostArg, dbPortArg, dbNameArg, rootArg, ignoreArg, outputToFileArg);
     
