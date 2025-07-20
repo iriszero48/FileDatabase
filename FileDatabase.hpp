@@ -67,13 +67,51 @@ namespace FileDatabase
         }
     };
 
+    inline int GetFileType(const std::filesystem::file_type& t)
+    {
+        try
+        {
+            switch (t)
+            {
+            case std::filesystem::file_type::none:
+                return 0;
+            case std::filesystem::file_type::not_found:
+                return 1;
+            case std::filesystem::file_type::regular:
+                return 2;
+            case std::filesystem::file_type::directory:
+                return 3;
+            case std::filesystem::file_type::symlink:
+                return 4;
+            case std::filesystem::file_type::block:
+                return 5;
+            case std::filesystem::file_type::character:
+                return 6;
+            case std::filesystem::file_type::fifo:
+                return 7;
+            case std::filesystem::file_type::socket:
+                return 8;
+            case std::filesystem::file_type::unknown:
+                return 9;
+            default:
+                return CuUtil::ToUnderlying(t);
+            }
+        }
+        catch (const std::exception& e)
+        {
+            LogVerb("{}", e.what());
+        }
+
+        return 0;
+    }
+
     inline int32_t GetFileStatus(const std::filesystem::path& path)
     {
         try
         {
             auto st = std::filesystem::status(path);
 
-            uint32_t ret = CuUtil::ToUnderlying(st.type()) << 16;
+            uint32_t ret = GetFileType(st.type()) << 16;
             ret += CuUtil::ToUnderlying(st.permissions());
 
             return ret;
