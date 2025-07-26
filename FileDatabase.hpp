@@ -503,9 +503,12 @@ namespace FileDatabase
                 scanQueue.emplace_back(root);
                 while (!scanQueue.empty())
                 {
+                    const auto curPath = scanQueue.front();
+                    scanQueue.pop_front();
+
                     try
                     {
-                        for (std::filesystem::directory_iterator file(scanQueue.front(), std::filesystem::directory_options::skip_permission_denied, errorCode); file != end; ++file)
+                        for (std::filesystem::directory_iterator file(curPath, std::filesystem::directory_options::skip_permission_denied, errorCode); file != end; ++file)
                         {
                             try
                             {
@@ -554,7 +557,7 @@ namespace FileDatabase
 
                                 if (isDir)
                                 {
-                                    scanQueue.emplace_back(file->path());
+                                    scanQueue.emplace_front(file->path());
                                 }
 
                                 queue->Emplace(file->path(), ListenerEvent::Update);
@@ -567,9 +570,8 @@ namespace FileDatabase
                     }
                     catch (const std::exception& e)
                     {
-                        LogErr("scan: {} {}", scanQueue.front(), e.what());
+                        LogErr("scan: {} {}", curPath, e.what());
                     }
-                    scanQueue.pop_front();
                 }
             }
 
