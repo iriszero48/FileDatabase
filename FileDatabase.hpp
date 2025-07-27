@@ -28,18 +28,22 @@ namespace FileDatabase
     using ListenerEvent = FileDatabase_ListenerEvent;
 
     using QueueElemType = std::pair<std::filesystem::path, ListenerEvent>;
-    using QueueType = CuThread::Channel<QueueElemType, CuThread::Dynamics>;
-    using QueuePtrType = std::shared_ptr<QueueType>;
+
+    template <size_t Limit = 0>
+    using QueueType = CuThread::Channel<QueueElemType, Limit>;
+
+    template <size_t Limit = 0>
+    using QueuePtrType = std::shared_ptr<QueueType<Limit>>;
 
     static std::atomic_bool SqlExit{ false };
 
     class UpdateListener : public efsw::FileWatchListener
     {
-        QueuePtrType queue;
+        QueuePtrType<> queue;
         std::regex ignore{};
 
     public:
-        UpdateListener(QueuePtrType queue, std::regex ignore) : queue(queue), ignore(std::move(ignore)) {}
+        UpdateListener(QueuePtrType<> queue, std::regex ignore) : queue(queue), ignore(std::move(ignore)) {}
 
         void handleFileAction(efsw::WatchID watchid, const std::string& dir,
             const std::string& filename, efsw::Action action,
@@ -283,7 +287,8 @@ namespace FileDatabase
         return {};
     }
 
-    inline void SqlHandler(const SqlHandlerParams& params, QueuePtrType queue)
+    template <size_t Limit = 0>
+    void SqlHandler(const SqlHandlerParams& params, QueuePtrType<Limit> queue)
     {
         const auto& [device, dbUser, dbPassword, dbHost, dbPort, dbName, ignore, outputToFile, noHash, hashSkip] = params;
         while (true)
@@ -436,10 +441,9 @@ namespace FileDatabase
         {
             params.NoHash = true;
 
-            auto queue = std::make_shared<QueueType>();
-            queue->DynLimit = 0;
+            auto queue = std::make_shared<QueueType<>>();
 
-            std::thread sqlThread(SqlHandler, params, queue);
+            std::thread sqlThread(SqlHandler<>, params, queue);
 
             std::unique_ptr<efsw::FileWatcher> watcher = std::make_unique<efsw::FileWatcher>();
             std::unique_ptr<UpdateListener> listener = std::make_unique<UpdateListener>(queue, params.Ignore);
@@ -473,10 +477,9 @@ namespace FileDatabase
 
         void Sync(FileDatabase::SqlHandlerParams params, const std::set<std::filesystem::path> roots)
         {
-            auto queue = std::make_shared<QueueType>();
-            queue->DynLimit = 500;
+            auto queue = std::make_shared<QueueType<500>>();
 
-            std::thread sqlThread(SqlHandler, params, queue);
+            std::thread sqlThread(SqlHandler<500>, params, queue);
 
             for (const auto& root : roots)
             {
