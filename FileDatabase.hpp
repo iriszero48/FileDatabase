@@ -13,7 +13,6 @@
 #include <Cryptography/Crc32.hpp>
 #include <set>
 #include <regex>
-#include <Bit/Bit.hpp>
 #include <deque>
 
 #ifdef CuUtil_Platform_Windows
@@ -503,8 +502,8 @@ namespace FileDatabase
                 scanQueue.emplace_back(root);
                 while (!scanQueue.empty())
                 {
-                    const auto curPath = scanQueue.front();
-                    scanQueue.pop_front();
+                    const auto curPath = scanQueue.back();
+                    scanQueue.pop_back();
 
                     try
                     {
@@ -557,10 +556,17 @@ namespace FileDatabase
 
                                 if (isDir)
                                 {
-                                    scanQueue.emplace_front(file->path());
+                                    scanQueue.emplace_back(file->path());
                                 }
 
                                 queue->Emplace(file->path(), ListenerEvent::Update);
+
+                                static uint64_t counter = 0;
+                                counter++;
+                                if (counter % 500 == 0)
+                                {
+                                    scanQueue.shrink_to_fit();
+                                }
                             }
                             catch (const std::exception& e)
                             {
