@@ -27,7 +27,8 @@ namespace FileDatabase
 //    CuEnum_MakeEnumDef(ListenerEvent, Update, Delete);
     using ListenerEvent = FileDatabase_ListenerEvent;
 
-    using QueueType = CuThread::Channel<std::pair<std::filesystem::path, ListenerEvent>>;
+    using QueueElemType = std::pair<std::filesystem::path, ListenerEvent>;
+    using QueueType = CuThread::Channel<QueueElemType, CuThread::Dynamics>;
     using QueuePtrType = std::shared_ptr<QueueType>;
 
     static std::atomic_bool SqlExit{ false };
@@ -560,13 +561,6 @@ namespace FileDatabase
                                 }
 
                                 queue->Emplace(file->path(), ListenerEvent::Update);
-
-                                static uint64_t counter = 0;
-                                counter++;
-                                if (counter % 500 == 0)
-                                {
-                                    scanQueue.shrink_to_fit();
-                                }
                             }
                             catch (const std::exception& e)
                             {
