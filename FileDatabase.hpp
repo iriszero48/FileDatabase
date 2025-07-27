@@ -174,9 +174,9 @@ namespace FileDatabase
     // md5, sha256, sha1, crc32
     inline std::tuple<std::string, std::string, std::string, std::string> GetFileHash(const std::filesystem::path& path)
     {
-        if (std::filesystem::status(path).type() == std::filesystem::file_type::regular)
+        try
         {
-            try
+            if (std::filesystem::status(path).type() == std::filesystem::file_type::regular)
             {
                 const auto sz = std::filesystem::file_size(path);
                 CuCrypto::Md5 md5{};
@@ -208,13 +208,12 @@ namespace FileDatabase
                     CuStr::Appends("'\\x", md5.Digest().ToString(), "'"),
                     CuStr::Appends("'\\x", sha256.Digest().ToString(), "'"),
                     CuStr::Appends("'\\x", sha1.Digest().ToString(), "'"),
-                    CuStr::Appends("'\\x", crc32.Digest().ToString(), "'")
-                );
+                    CuStr::Appends("'\\x", crc32.Digest().ToString(), "'"));
             }
-            catch (const std::exception& ex)
-            {
-                LogVerb("{}", ex.what());
-            }
+        }
+        catch (const std::exception& ex)
+        {
+            LogVerb("{}", ex.what());
         }
 
         return {};
